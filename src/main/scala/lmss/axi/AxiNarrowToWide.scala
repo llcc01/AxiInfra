@@ -4,33 +4,58 @@ import chisel3._
 import chisel3.util._
 import xs.utils.PickOneLow
 import chisel3.experimental.noPrefix
+import AxiComputeFunction._
+import xs.utils.{CircularQueuePtr, HasCircularQueuePtrHelper}
 
 class AxiWidthWCvtBundle(axiP: AxiParams) extends Bundle {
-  val addr = UInt(axiP.addrBits.W)
-  val size = UInt(axiP.sizeBits.W)
-  val id = UInt(axiP.idBits.W)
+  val addrSfx = UInt(12.W)
+  val size     = UInt(axiP.sizeBits.W)
+  val id       = UInt(axiP.idBits.W)
+  val byteMask = UInt(12.W)
 
   def := (in: AWFlit): Unit = {
-    this.addr := in.addr
-    this.size := in.size
-    this.id   := in.id
-  }
-  def := (in: ARFlit): Unit = {
-    this.addr := in.addr
-    this.size := in.size
-    this.id   := in.id
+    this.addrSfx := in.addr(11, 0)
+    this.size     := in.size
+    this.id       := in.id
+    this.byteMask := PriorityMux(Seq(
+      isIncr(in.burst) -> 0xFFF.U,
+      isWrap(in.burst) -> (getMask(in.len, in.size)),
+      true.B           -> 0.U
+    ))
   }
 }
+
 
 class AxiWidthRCvtBundle(axiP: AxiParams, outstanding: Int) extends Bundle {
-  val addr = UInt(axiP.addrBits.W)
-  val size = UInt(axiP.sizeBits.W)
-  val id = UInt(axiP.idBits.W)
-  val nid = UInt(log2Ceil(outstanding).W)
+  val addrSfx  = UInt(axiP.addrBits.W)
+  val size     = UInt(axiP.sizeBits.W)
+  val id       = UInt(axiP.idBits.W)
+  val nid      = UInt(log2Ceil(outstanding).W)
+  val byteMask = UInt(12.W)
+
+  def := (in: ARFlit): Unit = {
+    this.addrSfx := in.addr(11, 0)
+    this.size     := in.size
+    this.id       := in.id
+    this.byteMask := PriorityMux(Seq(
+      isIncr(in.burst) -> 0xFFF.U,
+      isWrap(in.burst) -> (getMask(in.len, in.size)),
+      true.B           -> 0.U
+    ))
+  }
 }
 
-class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) extends Module {
+class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) extends Module with HasCircularQueuePtrHelper {
   override val desiredName = s"AxiWidthCvt${mstParams.dataBits}To${slvParams.dataBits}"
+  private class CirQAxiEntryPtr extends CircularQueuePtr[CirQAxiEntryPtr](buffer)
+  private object CirQAxiEntryPtr {
+  def apply(f: Bool, v: UInt): CirQAxiEntryPtr = {
+        val ptr = Wire(new CirQAxiEntryPtr)
+        ptr.flag := f
+        ptr.value := v
+        ptr
+    }
+  }
   val io = IO(new Bundle {
     val mst = Flipped(new AxiBundle(mstParams))
     val slv = new AxiBundle(slvParams)
@@ -38,7 +63,9 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   private val mdw = mstParams.dataBits
   private val sdw = slvParams.dataBits
   private val seg = sdw / mdw
-  private val awq = Module(new Queue(new AxiWidthWCvtBundle(mstParams), entries = buffer))
+  private val awinfo = Reg(Vec(buffer, new AxiWidthWCvtBundle(mstParams)))
+  private val wHeadPtr = RegInit(CirQAxiEntryPtr(f = false.B, v = 0.U))
+  private val wTailPtr = RegInit(CirQAxiEntryPtr(f = false.B, v = 0.U))
   private val wq = Module(new Queue(new WFlit(mstParams), entries = 2))
   private val rq = Module(new Queue(new RFlit(slvParams), entries = 1, pipe = true))
   private val arvld = RegInit(VecInit(Seq.fill(buffer)(false.B)))
@@ -64,13 +91,6 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
     }.elsewhen(rFireMayHit && io.mst.r.bits._last && arinfo(i).nid === 0.U) {
       arvld(i) := false.B
     }
-    when(io.mst.ar.fire && arsel.bits(i)) {
-      arinfo(i) := io.mst.ar.bits
-    }
-    when(arFireHit) {
-      arinfo(i).size  := io.mst.ar.bits.size
-      arinfo(i).id    := io.mst.ar.bits.id
-    }
     when(arFireHit) {
       arinfo(i).nid   := rawNid
     }.elsewhen((cncrtWkVldReg && cncrtWkEtrReg(i)) && (rFireMayHit && io.mst.r.bits._last && arinfo(i).nid =/= 0.U)) {
@@ -79,20 +99,23 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
       arinfo(i).nid   := arinfo(i).nid - 1.U
     }
     when(arFireHit) {
-      arinfo(i).addr := io.mst.ar.bits.addr
-    }.elsewhen(rFireMayHit && arinfo(i).nid === 0.U) {
-      arinfo(i).addr := arinfo(i).addr + (i.U << arinfo(i).size)
+      arinfo(i)  := io.mst.ar.bits
+    }
+    when(rFireMayHit && arinfo(i).nid === 0.U) {
+      arinfo(i).addrSfx := getNext(arinfo(i).addrSfx, arinfo(i).size, arinfo(i).byteMask)
     }
 
     infoSelOH(i)     := arvld(i) && arinfo(i).id === io.mst.r.bits.id && arinfo(i).nid === 0.U
     nidCalcVec(i)    := arvld(i) && arinfo(i).id === io.mst.ar.bits.id
   }
   //AW Channel Connection
-  awq.io.enq.valid := io.mst.aw.valid && io.slv.aw.ready
-  awq.io.enq.bits := io.mst.aw.bits
-  io.slv.aw.valid := io.mst.aw.valid && awq.io.enq.ready
+  when(io.mst.aw.fire) {
+    awinfo(wHeadPtr.value) := io.mst.aw.bits
+    wHeadPtr               := wHeadPtr + 1.U
+  }
+  io.slv.aw.valid := io.mst.aw.valid && !isFull(wHeadPtr, wTailPtr)
   io.slv.aw.bits := io.mst.aw.bits
-  io.mst.aw.ready := io.slv.aw.ready && awq.io.enq.ready
+  io.mst.aw.ready := io.slv.aw.ready && !isFull(wHeadPtr, wTailPtr)
 
   //AR Channel Connection
   io.slv.ar.valid := io.mst.ar.valid && arsel.valid
@@ -100,24 +123,30 @@ class AxiNarrowToWide(mstParams: AxiParams, slvParams: AxiParams, buffer:Int) ex
   io.mst.ar.ready := io.slv.ar.ready && arsel.valid
 
   //W Channel Connection
+  private val awinfoTail = awinfo(wTailPtr.value)
   private val strb = Wire(Vec(seg, UInt((mdw / 8).W)))
-  private val waddrcvt = if(sdw > mdw) awq.io.deq.bits.addr(log2Ceil(sdw / 8) - 1, log2Ceil(mdw / 8)) else 0.U
+  private val waddrcvt = if(sdw > mdw) awinfoTail.addrSfx(log2Ceil(sdw / 8) - 1, log2Ceil(mdw / 8)) else 0.U
   strb.zipWithIndex.foreach({case(s, i) => s := Mux(waddrcvt === i.U, wq.io.deq.bits.strb, 0.U)})
 
   wq.io.enq <> io.mst.w
-  io.slv.w.valid := wq.io.deq.valid && awq.io.deq.valid
+  io.slv.w.valid := wq.io.deq.valid && !isEmpty(wHeadPtr, wTailPtr)
   io.slv.w.bits := wq.io.deq.bits
   io.slv.w.bits.data := Fill(seg, wq.io.deq.bits.data)
   io.slv.w.bits.strb := strb.asUInt
-  wq.io.deq.ready := io.slv.w.ready && awq.io.deq.valid
-  awq.io.deq.ready := io.slv.w.ready && wq.io.deq.valid && wq.io.deq.bits._last
+  wq.io.deq.ready := io.slv.w.ready && !isEmpty(wHeadPtr, wTailPtr)
+  when(wq.io.deq.valid && io.slv.w.ready && !isEmpty(wHeadPtr, wTailPtr)) {
+    awinfoTail.addrSfx := getNext(awinfoTail.addrSfx, awinfoTail.size, awinfoTail.byteMask)
+  }
+  when(wq.io.deq.valid && io.slv.w.ready && wq.io.deq.bits._last && !isEmpty(wHeadPtr, wTailPtr)) {
+    wTailPtr := wTailPtr + 1.U
+  }
 
   //B Channel Connection
   io.mst.b <> io.slv.b
 
   //R Channel Connection
   private val infoSel = arinfo(io.slv.r.bits.id(log2Ceil(buffer) - 1, 0))
-  private val raddrcvt = if(sdw > mdw) infoSel.addr(log2Ceil(sdw / 8) - 1, log2Ceil(mdw / 8)) else 0.U
+  private val raddrcvt = if(sdw > mdw) infoSel.addrSfx(log2Ceil(sdw / 8) - 1, log2Ceil(mdw / 8)) else 0.U
   private val rdata = io.slv.r.bits.data.asTypeOf(Vec(seg, UInt(mdw.W)))
 
   rq.io.enq <> io.slv.r

@@ -188,4 +188,31 @@ package object axi {
 
     def <>(that: AxiBundle): Unit = AxiUtils.extConn(this, that)
   }
+  object AxiComputeFunction {
+    def FIX   = "b00".U
+    def INCR  = "b01".U
+    def WRAP  = "b10".U
+    def RSV   = "b11".U
+
+    def isFix(burst: UInt): Bool = {
+      !(burst.orR)
+    }
+
+    def isIncr(burst: UInt): Bool = {
+      burst(0).asBool
+    }
+
+    def isWrap(burst: UInt): Bool = {
+      burst(1).asBool
+    }
+
+    def getMask(len:UInt, size:UInt) = {
+      val maxShift = 1 << 3
+      val tail = ((BigInt(1) << maxShift) - 1).U
+      (Cat(len, tail) << size) >> maxShift
+    }
+    def getNext(addr: UInt, size: UInt, byteMask: UInt): UInt = {
+      (~byteMask & addr | (addr + (1.U(6.W) << size)) & byteMask)
+    }
+  }
 }

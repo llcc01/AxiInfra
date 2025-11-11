@@ -48,15 +48,13 @@ class AxiInPortAdapter(port:PortParams)(implicit p:Parameters) extends RawModule
     reorder.suggestName("reorder")
     asyncSrc.map(_.suggestName("async_src"))
     asycnSink.map(_.suggestName("async_sink"))
+    reorder.io.mst <> pipe.io.out
+    cvt.io.mst <> reorder.io.slv
     if(cdc) {
-      asyncSrc.get.s_axi <> s_axi
+      asyncSrc.get.s_axi <> cvt.io.slv
       asycnSink.get.async <> asyncSrc.get.async
-      reorder.io.mst <> asycnSink.get.m_axi
-      cvt.io.mst <> reorder.io.slv
-      m_axi <> cvt.io.slv
+      m_axi <> asycnSink.get.m_axi
     } else {
-      reorder.io.mst <> s_axi
-      cvt.io.mst <> reorder.io.slv
       m_axi <> cvt.io.slv
     }
   } else {

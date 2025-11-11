@@ -48,11 +48,9 @@ class LaomaSubsys(implicit p:Parameters) extends RawModule with ImplicitClock wi
 
   private val mems = for(((pp, mp), i) <- lmssP.memp.zip(memPs).zipWithIndex) yield noPrefix {
     val sfx = if(pp.name != "") pp.name else s"$i"
-    val memBank = LazyModule(new MemoryBank(mp.params))
-    val mb = Module(memBank.module)
-    mb.s_axi <> mp
-    memBank.suggestName(s"mem_$sfx")
-    mb
+    val mem_axi = IO(new ExtAxiBundle(mp.params))
+    mem_axi.suggestName(s"mem_$sfx")
+    mp <> mem_axi
   }
 
   val msts = for(((pp, a), i) <- lmssP.mstp.zip(mstPs).zipWithIndex) yield noPrefix {
