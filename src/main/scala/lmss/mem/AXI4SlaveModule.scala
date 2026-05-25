@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MulanPSL-2.0
+// Copyright (c) 2025-2026 RedRISC Technology Co. Ltd.
+
 /***************************************************************************************
 * Copyright (c) 2020-2021 Institute of Computing Technology, Chinese Academy of Sciences
 * Copyright (c) 2020-2021 Peng Cheng Laboratory

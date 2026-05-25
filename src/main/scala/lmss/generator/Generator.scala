@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MulanPSL-2.0
+// Copyright (c) 2025-2026 RedRISC Technology Co. Ltd.
+
 package lmss.generator
 
 import chisel3.stage.ChiselGeneratorAnnotation
