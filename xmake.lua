@@ -17,7 +17,7 @@ task("rtl", function()
     if os.exists(rtl_dir) then os.rmdir(rtl_dir) end
     
     if os.host() == "windows" then
-      os.execv(os.shell(), table.join({"mill"}, chisel_opts))
+      os.execv("powershell", table.join({"mill"}, chisel_opts))
     else
       os.execv("mill", chisel_opts)
     end
@@ -42,7 +42,7 @@ end)
 task("comp", function()
     on_run(function()
         if os.host() == "windows" then
-            os.execv(os.shell(), { "mill", "-i", "lmss.compile" })
+            os.execv("powershell", { "mill", "-i", "lmss.compile" })
         else
             os.execv("mill", { "-i", "lmss.compile" })
         end
@@ -55,7 +55,7 @@ end)
 task("idea", function()
     on_run(function()
         if os.host() == "windows" then
-            os.execv(os.shell(), { "mill", "-i", "mill.idea.GenIdea/idea" })
+            os.execv("powershell", { "mill", "-i", "mill.idea.GenIdea/idea" })
         else
             os.execv("mill", { "-i", "mill.idea.GenIdea/idea" })
         end
